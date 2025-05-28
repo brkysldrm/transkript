@@ -86,18 +86,31 @@ def zorunlu_ders_kontrolu(df, zorunlu_dersler):
     alinmamis = []
     basarisiz = []
 
+    # Alternatif adlar tanımı
+    alternatif_adlar = {
+        "ODYOLOJİYE GİRİŞ VE ETİK": ["ODYOLOJİYE GİRİŞ VE ETİK", "ODYOLOJİYE GİRİŞ"]
+        # Gerekirse başka dersler de buraya eklenebilir
+    }
+
     for donem, dersler in zorunlu_dersler.items():
         for ders_adi, akts in dersler.items():
-            ders_adi_lower = ders_adi.lower()
-            ders_kayitlari = df[df["Ders Adı (küçük)"].str.contains(ders_adi_lower, regex=False)]
-            if ders_kayitlari.empty:
+            # Alternatif ad kontrolü
+            alternatifler = alternatif_adlar.get(ders_adi, [ders_adi])
+            bulundu = False
+            for alternatif in alternatifler:
+                ders_adi_lower = alternatif.lower()
+                ders_kayitlari = df[df["Ders Adı (küçük)"].str.contains(ders_adi_lower, regex=False)]
+                if not ders_kayitlari.empty:
+                    bulundu = True
+                    if any(notu in gecerli_notlar for notu in ders_kayitlari["Harf Notu"]):
+                        break
+                    else:
+                        basarisiz.append((donem, ders_adi, akts))
+                        break
+            if not bulundu:
                 alinmamis.append((donem, ders_adi, akts))
-            else:
-                if any(notu in gecerli_notlar for notu in ders_kayitlari["Harf Notu"]):
-                    continue
-                else:
-                    basarisiz.append((donem, ders_adi, akts))
     return alinmamis, basarisiz
+
 
 def secmeli_ders_kontrolu(df, secmeli_sartlar):
     df_gecilen = df[df["Harf Notu"].str.upper() != "F"]
