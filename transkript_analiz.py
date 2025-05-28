@@ -36,7 +36,7 @@ uploaded_files = st.file_uploader(
 
 def parse_student_info(text):
     tc_no = re.search(r'T\.C\. Kimlik No\s*:\s*(\d{11})', text)
-    ogr_no = re.search(r'Öğrenci No\s*:\s*(\d+)', text)
+    ogr_no = re.search(r'Öğrenci No\s*:\s*(\w+)', text)  # Alfanümerik öğrenci numarası destekli
     adsoyad_raw = re.search(r'Adı Soyadı\s*:\s*(.*)', text)
     adsoyad = adsoyad_raw.group(1).split("Öğretim")[0].strip() if adsoyad_raw else "Bulunamadı"
     bolum_raw = re.search(r'Bölüm\s*/\s*Program\s*:\s*(.*)', text)
@@ -82,7 +82,6 @@ def parse_courses(text):
 def zorunlu_ders_kontrolu(df, zorunlu_dersler):
     df["Harf Notu"] = df["Harf Notu"].fillna("").str.upper()
     df["Ders Adı (küçük)"] = df["Ders Adı"].str.lower()
-
     gecerli_notlar = {"A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "G", "G+", "G-"}
     alinmamis = []
     basarisiz = []
@@ -91,7 +90,6 @@ def zorunlu_ders_kontrolu(df, zorunlu_dersler):
         for ders_adi, akts in dersler.items():
             ders_adi_lower = ders_adi.lower()
             ders_kayitlari = df[df["Ders Adı (küçük)"].str.contains(ders_adi_lower, regex=False)]
-
             if ders_kayitlari.empty:
                 alinmamis.append((donem, ders_adi, akts))
             else:
@@ -119,7 +117,6 @@ def secmeli_ders_kontrolu(df, secmeli_sartlar):
             })
     return eksik
 
-# 🎯 Zorunlu dersler
 zorunlu_dersler = {
     "1. Sınıf Güz": {
         "ANATOMİ I": 4,
@@ -229,6 +226,7 @@ secmeli_sartlar = {
         "secilecek_sayi": 1
     }
 }
+
 # --- Ana işlem akışı ---
 if uploaded_files:
     for uploaded_file in uploaded_files:
@@ -244,9 +242,13 @@ if uploaded_files:
         df_gecilen = df[df["Harf Notu"].isin(gecerli_notlar)]
         toplam_akts = df_gecilen["AKTS"].sum()
 
+        alinmamis, basarisiz = zorunlu_ders_kontrolu(df_gecilen, zorunlu_dersler)
+        secmeli_eksikler = secmeli_ders_kontrolu(df, secmeli_sartlar)
+
+        zorunlu_ders_eksikligi = bool(alinmamis or basarisiz)
         mezuniyet_akts = 240
         eksik_akts = mezuniyet_akts - toplam_akts
-        mezun_durumu = toplam_akts >= mezuniyet_akts
+        mezun_durumu = toplam_akts >= mezuniyet_akts and not zorunlu_ders_eksikligi
 
         renk = "#d4edda" if mezun_durumu else "#f8d7da"
         renk_border = "#28a745" if mezun_durumu else "#dc3545"
@@ -267,15 +269,15 @@ if uploaded_files:
             st.success(f"Toplam Geçilen AKTS: {toplam_akts}")
 
             if mezun_durumu:
-                st.success(f"🎓 Mezuniyet için gerekli 240 AKTS tamamlanmış.")
+                st.success("🎓 Mezuniyet için gerekli 240 AKTS tamamlanmış.")
             else:
-                st.error(f"🎓 Mezuniyet için gerekli 240 AKTS'den {eksik_akts} AKTS eksik.")
+                if toplam_akts >= mezuniyet_akts and zorunlu_ders_eksikligi:
+                    st.error("🎓 240 AKTS tamamlanmış ancak alınmamış zorunlu dersler mevcut.")
+                else:
+                    st.error(f"🎓 Mezuniyet için gerekli 240 AKTS'den {eksik_akts} AKTS eksik.")
 
             st.subheader("📘 Alınan Dersler")
             st.dataframe(df.drop(columns=["Ders Adı (küçük)"], errors='ignore'))
-
-            alinmamis, basarisiz = zorunlu_ders_kontrolu(df_gecilen, zorunlu_dersler)
-            secmeli_eksikler = secmeli_ders_kontrolu(df, secmeli_sartlar)
 
             if alinmamis:
                 st.subheader("🟡 Alınmamış Zorunlu Dersler")
@@ -297,3 +299,4 @@ if uploaded_files:
 
             if not alinmamis and not basarisiz and not secmeli_eksikler and mezun_durumu:
                 st.success("🎉 Tüm zorunlu, seçmeli ders ve AKTS mezuniyet koşulları sağlanmış!")
+
