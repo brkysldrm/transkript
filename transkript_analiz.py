@@ -3,7 +3,37 @@ import pdfplumber
 import re
 import pandas as pd
 
-# Öğrenci bilgilerini çıkar
+st.set_page_config(page_title="İstanbul Medipol Üniversitesi - Odyoloji Transkript Analizi", layout="wide")
+
+st.markdown("""
+<style>
+    body {
+        background-color: #f8f9fa;
+    }
+    .stFileUploader {
+        background-color: #f0f2f6;
+        border: 2px dashed #0c4c8a;
+        border-radius: 10px;
+        padding: 2rem;
+        margin-bottom: 2rem;
+        font-size: 1.2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown(
+    "<h1 style='text-align: center; color: #0c4c8a;'>📘 İstanbul Medipol Üniversitesi<br>Odyoloji Bölümü Transkript Analiz Programı</h1>",
+    unsafe_allow_html=True
+)
+
+uploaded_files = st.file_uploader(
+    "📤 Lütfen Örnektir yazısı kaldırılmış transkriptlerinizi buraya yükleyiniz",
+    type="pdf",
+    accept_multiple_files=True
+)
+
+# --- Fonksiyonlar ---
+
 def parse_student_info(text):
     tc_no = re.search(r'T\.C\. Kimlik No\s*:\s*(\d{11})', text)
     ogr_no = re.search(r'Öğrenci No\s*:\s*(\d+)', text)
@@ -18,7 +48,6 @@ def parse_student_info(text):
         'Bölüm/Program': bolum
     }
 
-# Dersleri PDF'ten çıkar
 def parse_courses(text):
     dersler = []
     donemler = list(re.finditer(r'(\d+\.\s*\d{4}\s*-\s*\d{4}\s+(Güz|Bahar)\s+Dönemi)', text))
@@ -27,7 +56,6 @@ def parse_courses(text):
         end = donemler[i + 1].start() if i + 1 < len(donemler) else len(text)
         donem_text = text[start:end]
 
-        # Satır temizliği
         donem_text_cleaned = ""
         for line in donem_text.splitlines():
             parts = re.findall(r'(\d*[A-ZÇĞİÖŞÜ]{3,}\d{5,7})', line)
@@ -39,37 +67,42 @@ def parse_courses(text):
                 donem_text_cleaned += line + '\n'
         donem_text = donem_text_cleaned
 
-        # Ders regex'i
-        ders_pattern = r'(\d*[A-ZÇĞİÖŞÜ]{3,}\d{5,7})\s+(.+?)\s+([A-F][\+\-]?|G\+|G\-)?\s+([\d,]*)\s+(\d+)'
+        ders_pattern = r'(\d*[A-ZÇĞİÖŞÜ]{3,}\d{5,7})\s+(.+?)\s+([A-F][\+\-]?|G\+|G\-)?\s+([\d,]+)(?:\s+<T>)?\s+(\d+)'
         for match in re.findall(ders_pattern, donem_text):
             kod, ad, harf, katsayi, akts = match
             dersler.append({
                 "Kodu": kod.strip(),
                 "Ders Adı": ad.strip(),
-                "Harf Notu": harf.strip() if harf else "",
+                "Harf Notu": harf.strip().upper() if harf else "",
                 "Başarı Katsayısı": katsayi.replace(",", ".") if katsayi else "",
                 "AKTS": int(akts)
             })
     return dersler
 
-# Zorunlu ders kontrolü
 def zorunlu_ders_kontrolu(df, zorunlu_dersler):
-    df_lower = df.copy()
-    df_lower["Ders Adı (küçük)"] = df_lower["Ders Adı"].str.lower()
-    alinmamis, basarisiz = [], []
+    df["Harf Notu"] = df["Harf Notu"].fillna("").str.upper()
+    df["Ders Adı (küçük)"] = df["Ders Adı"].str.lower()
+
+    gecerli_notlar = {"A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "G", "G+", "G-"}
+    alinmamis = []
+    basarisiz = []
+
     for donem, dersler in zorunlu_dersler.items():
-        for ders, akts in dersler.items():
-            ders_lower = ders.lower()
-            bulunan = df_lower[df_lower["Ders Adı (küçük)"].str.contains(ders_lower)]
-            if bulunan.empty:
-                alinmamis.append((donem, ders, akts))
-            elif all(n == "F" for n in bulunan["Harf Notu"]):
-                basarisiz.append((donem, ders, akts))
+        for ders_adi, akts in dersler.items():
+            ders_adi_lower = ders_adi.lower()
+            ders_kayitlari = df[df["Ders Adı (küçük)"].str.contains(ders_adi_lower, regex=False)]
+
+            if ders_kayitlari.empty:
+                alinmamis.append((donem, ders_adi, akts))
+            else:
+                if any(notu in gecerli_notlar for notu in ders_kayitlari["Harf Notu"]):
+                    continue
+                else:
+                    basarisiz.append((donem, ders_adi, akts))
     return alinmamis, basarisiz
 
-# Seçmeli ders kontrolü
 def secmeli_ders_kontrolu(df, secmeli_sartlar):
-    df_gecilen = df[df["Harf Notu"] != "F"]
+    df_gecilen = df[df["Harf Notu"].str.upper() != "F"]
     eksik = []
     for donem, detay in secmeli_sartlar.items():
         alinmis = []
@@ -129,13 +162,12 @@ zorunlu_dersler = {
         "PEDİATRİK ODYOLOJİK TESTLER": 4,
         "İŞİTSEL REHABİLİTASYON": 4,
         "İŞİTME CİHAZLARI I": 3,
-        "İŞARET DİLİ II": 3,
         "İLETİŞİM BOZUKLUKLARINDA AİLE DANIŞMANLIĞI": 2,
         "MESLEKİ İNGİLİZCE VE TIBBİ TERMİNOLOJİ": 2
     },
     "3. Sınıf Güz": {
         "MESLEKİ UYGULAMA III": 4,
-        "VESTİBULER  PATOLO. TANI. VE DEĞERLENDİRİLME": 4,
+        "VESTİBULER PATOLO. TANI. VE DEĞERLENDİRİLME": 4,
         "ODYOLOJİDE ÖZEL KONULAR": 4,
         "İŞİTME CİHAZLARI II": 4,
         "İŞİTSEL İMPLANTLAR I": 4,
@@ -166,7 +198,8 @@ zorunlu_dersler = {
         "ODYOLOJİ SEMİNER II": 4,
         "DENEYSEL ODYOLOJİ VE PROJE HAZIRLAMA II": 3,
         "İŞİTME ENG. BEBEK VE ÇOCUK. EĞİTSEL YAKLAŞIM": 3,
-        "İŞİTME MERKEZLERİNDE UYGULAMA": 4
+        "İŞİTME MERKEZLERİNDE UYGULAMA": 4,
+        "MEZUNİYET PROJESİ": 10
     }
 }
 
@@ -186,7 +219,7 @@ secmeli_sartlar = {
             "VÜCUT MEKANİĞİ VE POSTÜR": 2,
             "OYUN TEMELLİ BECERİ GELİŞTİRME": 2
         },
-        "secilecek_sayi": 2
+        "secilecek_sayi": 1
     },
     "4. Sınıf Güz": {
         "alternatif_dersler": {
@@ -196,49 +229,71 @@ secmeli_sartlar = {
         "secilecek_sayi": 1
     }
 }
+# --- Ana işlem akışı ---
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        with pdfplumber.open(uploaded_file) as pdf:
+            all_text = '\n'.join([p.extract_text() or "" for p in pdf.pages])
 
-# 🎯 Streamlit arayüz
-st.set_page_config(page_title="Transkript Analiz", layout="wide")
-st.title("🎓 Transkript Analiz Programı")
+        info = parse_student_info(all_text)
+        dersler = parse_courses(all_text)
+        df = pd.DataFrame(dersler)
 
-uploaded_file = st.file_uploader("Transkript PDF dosyasını yükleyin", type="pdf")
+        df["Harf Notu"] = df["Harf Notu"].fillna("").str.upper()
+        gecerli_notlar = {"A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "G", "G+", "G-"}
+        df_gecilen = df[df["Harf Notu"].isin(gecerli_notlar)]
+        toplam_akts = df_gecilen["AKTS"].sum()
 
-if uploaded_file:
-    with pdfplumber.open(uploaded_file) as pdf:
-        all_text = '\n'.join([p.extract_text() for p in pdf.pages if p.extract_text()])
+        mezuniyet_akts = 240
+        eksik_akts = mezuniyet_akts - toplam_akts
+        mezun_durumu = toplam_akts >= mezuniyet_akts
 
-    info = parse_student_info(all_text)
-    dersler = parse_courses(all_text)
-    df = pd.DataFrame(dersler).drop_duplicates(subset=["Kodu", "Ders Adı"], keep="last")
-    toplam_akts = df[df["Harf Notu"] != "F"]["AKTS"].sum()
+        renk = "#d4edda" if mezun_durumu else "#f8d7da"
+        renk_border = "#28a745" if mezun_durumu else "#dc3545"
 
-    st.subheader("👤 Öğrenci Bilgileri")
-    st.info(f"{info['Adı Soyadı']} - {info['Öğrenci No']} - {info['Bölüm/Program']} - TC: {info['TC Kimlik No']}")
-    st.success(f"Toplam Geçilen AKTS: {toplam_akts}")
+        with st.container():
+            st.markdown(
+                f"""
+                <div style="border-left: 5px solid {renk_border}; background-color: {renk}; padding: 15px; border-radius: 8px; margin-top: 20px;">
+                    <strong>📄 {info['Adı Soyadı']} - {info['Öğrenci No']}</strong>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-    st.subheader("📘 Alınan Dersler")
-    st.dataframe(df)
+        with st.expander("🔍 Detayları Görüntüle"):
+            st.subheader("👤 Öğrenci Bilgileri")
+            st.info(f"{info['Adı Soyadı']} - {info['Öğrenci No']} - {info['Bölüm/Program']} - TC: {info['TC Kimlik No']}")
+            st.success(f"Toplam Geçilen AKTS: {toplam_akts}")
 
-    alinmamis, basarisiz = zorunlu_ders_kontrolu(df, zorunlu_dersler)
-    secmeli_eksikler = secmeli_ders_kontrolu(df, secmeli_sartlar)
+            if mezun_durumu:
+                st.success(f"🎓 Mezuniyet için gerekli 240 AKTS tamamlanmış.")
+            else:
+                st.error(f"🎓 Mezuniyet için gerekli 240 AKTS'den {eksik_akts} AKTS eksik.")
 
-    if alinmamis:
-        st.subheader("🟡 Alınmamış Zorunlu Dersler")
-        for donem, ders, akts in alinmamis:
-            st.warning(f"{donem} → {ders} ({akts} AKTS) dersi alınmamış.")
+            st.subheader("📘 Alınan Dersler")
+            st.dataframe(df.drop(columns=["Ders Adı (küçük)"], errors='ignore'))
 
-    if basarisiz:
-        st.subheader("🔴 Başarısız Zorunlu Dersler")
-        for donem, ders, akts in basarisiz:
-            st.error(f"{donem} → {ders} ({akts} AKTS) dersi F ile başarısız.")
+            alinmamis, basarisiz = zorunlu_ders_kontrolu(df_gecilen, zorunlu_dersler)
+            secmeli_eksikler = secmeli_ders_kontrolu(df, secmeli_sartlar)
 
-    if secmeli_eksikler:
-        st.subheader("⚠️ Eksik Seçmeli Ders Koşulları")
-        for item in secmeli_eksikler:
-            st.warning(f"{item['donem']} → En az {item['gerekli']} seçmeli ders alınmalı. Eksik: {item['eksik_sayi']}")
-            st.caption("Alternatifler:")
-            for ad, akts in item["alternatifler"].items():
-                st.caption(f"• {ad} ({akts} AKTS)")
+            if alinmamis:
+                st.subheader("🟡 Alınmamış Zorunlu Dersler")
+                for donem, ders, akts in alinmamis:
+                    st.warning(f"{donem} → {ders} ({akts} AKTS) dersi alınmamış.")
 
-    if not alinmamis and not basarisiz and not secmeli_eksikler:
-        st.success("🎉 Tüm zorunlu ve seçmeli ders koşulları sağlanmış!")
+            if basarisiz:
+                st.subheader("🔴 Başarısız Zorunlu Dersler")
+                for donem, ders, akts in basarisiz:
+                    st.error(f"{donem} → {ders} ({akts} AKTS) dersi F ile başarısız.")
+
+            if secmeli_eksikler:
+                st.subheader("⚠️ Eksik Seçmeli Ders Koşulları")
+                for item in secmeli_eksikler:
+                    st.warning(f"{item['donem']} → En az {item['gerekli']} seçmeli ders alınmalı. Eksik: {item['eksik_sayi']}")
+                    st.caption("Alternatifler:")
+                    for ad, akts in item["alternatifler"].items():
+                        st.caption(f"• {ad} ({akts} AKTS)")
+
+            if not alinmamis and not basarisiz and not secmeli_eksikler and mezun_durumu:
+                st.success("🎉 Tüm zorunlu, seçmeli ders ve AKTS mezuniyet koşulları sağlanmış!")
